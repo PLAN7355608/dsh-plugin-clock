@@ -51,7 +51,7 @@ provider，但 `RuntimeContextProjection` 只在**文本变化**时才追加新�
 
 ## 安装 / 卸载
 
-**正式安装位**：`C:\Users\Administrator\.dsh\plugins\dsh-plugin-clock-0.1.2.tgz`
+**正式安装位**：`%USERPROFILE%\.dsh\plugins\dsh-plugin-clock-0.1.2.tgz`
 （和 `dsh-plugin-printer` 一样放这里；profile 的依赖行指向它，工作区目录只是开发源码，
 删掉工作区不影响已装好的插件。）
 
@@ -63,7 +63,7 @@ cd E:\bigbluefishWorkbench\dsh-plugin-clock
 # 2) 打包：必须带 --cache，默认 npm cache 在 AppData，沙箱会拒写
 npm pack --cache .npm-cache
 # 3) 把新 tgz 拷到正式安装位
-Copy-Item .\dsh-plugin-clock-<新版本>.tgz C:\Users\Administrator\.dsh\plugins\ -Force
+Copy-Item .\dsh-plugin-clock-<新版本>.tgz %USERPROFILE%\.dsh\plugins\ -Force
 ```
 
 然后在 DSH 里用 `plugin_manager`：
@@ -101,3 +101,13 @@ Copy-Item .\dsh-plugin-clock-<新版本>.tgz C:\Users\Administrator\.dsh\plugins
 - **不提供 clock 工具**：手表要人抬手看，模型不会抬手；工具型方案等于没装。
 - 短消息在 transcript 里是可见的 user 消息（`source.kind = 'clock'`）；嫌吵就把
   `injectClockLine` 关掉，只留日历。
+
+---
+
+## 许可证
+
+本项目以 **GNU Affero 通用公共许可证第 3 版（AGPL-3.0）** 发布，许可证全文见 [LICENSE](LICENSE)。
+
+简单说：你可以自由使用、修改、分发，包括商业用途；但只要把修改后的版本提供给他人使用（包括通过网络提供服务），就必须以同一许可证公开完整源代码。
+
+> 本项目代码完全由人工智能生成，作者不提供任何形式的担保，详见上文的警告。
