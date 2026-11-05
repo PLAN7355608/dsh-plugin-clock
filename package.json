@@ -1,0 +1,24 @@
+{
+  "name": "dsh-plugin-clock",
+  "version": "0.1.2",
+  "private": true,
+  "description": "Gives the model a wall clock: a fresh clock reading at the start of every model step, plus a date-anchor calendar.",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

@@ -1,0 +1,97 @@
+# dsh-plugin-clock —— 给模型挂一块「墙上的钟」
+
+模型不是「采错时间」，而是**没有一块一直走着的钟**。这个插件把它补上：每个 model step
+开始时，模型手里都有一条当分钟的时间读数，外加一份每天翻篇的日历锚点。
+
+## 为什么内置方案不够
+
+内置的 `@deepseek-ai/dsh-time-context` 有三个结构性问题（源码 + 682 个 step 实测核实）：
+
+1. **硬节流 10 分钟**：`refreshIntervalMs` 默认 `600000`，长 turn 里几十个 step 共用同一个
+   几分钟前的读数（实测 44.4% 的 step 看到的是 ≥5 分钟前的钟，最长 599 秒）。
+2. **只追加、不作废**：读数是一条普通 user 消息，历史里散着一堆旧快照，没有 supersedes
+   语义，模型不知道该信哪条。
+3. **system prompt 里没有日期锚**：整会话唯一那条 `system/message` 里查不到任何
+   `YYYY-MM-DD`、年份或星期。
+
+## 两条通道，各干各的事
+
+| | 通道 A：日历 | 通道 B：时刻 |
+| --- | --- | --- |
+| 挂载点 | `ctx.systemPrompt.context({name:'clock:calendar'})` | `ctx.on('agent/pre-step')` 追加一条极短 user 消息 |
+| 内容 | 日期、星期、昨天/明天、ISO 周、本月剩几天 | 当前到分钟的时刻 + 时区 + 偏移 |
+| 何时变 | 跨天翻篇 | 分钟翻页 |
+| 体积 | 298 字符，**一天一条** runtime-context 快照（整条快照 2371 字符 ≈ 740 token） | 131 字符 ≈ 41 token，**每分钟一条**，活跃时约 2.4k token/小时 |
+
+**为什么时刻不走 context？** 因为 runtime-context 快照会连带重发所有插件注册的上下文
+（实测 2427 字符 ≈ 758 token：image-gen、working-directory、policy、team identity……）。
+实时钟放进去，每分钟重发一次等于 **45k token/小时**，不可接受。v1 就是这样，实测后否掉。
+独立短消息只算自己那 41 token。
+
+**为什么日历可以走 context？** `SystemPrompt.refreshContext()` 每个 step 都会重跑 context
+provider，但 `RuntimeContextProjection` 只在**文本变化**时才追加新快照。日历时文本里不含
+分钟，所以一天只有一条快照，成本可以忽略。（源码里 0.2.1-rc.5 的
+`dsh-system-prompt/lib/index.js` `refreshContext` / `resolveContext` 与
+`dsh-agent-loop/lib/index.js` 的 `RuntimeContextProjection.project` 都核过。）
+
+## 实测（本会话 session-e8d5a2a4，19:10 装机后）
+
+- 通道 B：19:10、19:11 各一条，131 字符，**同分钟无重复**（`probe-v2.mjs`）。
+- 通道 A：装机后新增一条 2371 字符快照，`Calendar: 2026-11-01 Sunday`，当天后续 step
+  不再追加。
+- 离线：`node test-render.mjs` 覆盖月末 23:59、跨年 ISO week 53、闰日 2028-02-29、
+  纽约 DST 结束日、`Asia/Kathmandu +05:45`、`Pacific/Kiritimati +14`、UTC，
+  以及「同一分钟不变 / 跨分钟变 / 同一天恒定 / 跨天变」四条去重边界。
+
+## 安装 / 卸载
+
+**正式安装位**：`C:\Users\Administrator\.dsh\plugins\dsh-plugin-clock-0.1.2.tgz`
+（和 `dsh-plugin-printer` 一样放这里；profile 的依赖行指向它，工作区目录只是开发源码，
+删掉工作区不影响已装好的插件。）
+
+开发改版后的刷新流程：
+
+```powershell
+cd E:\bigbluefishWorkbench\dsh-plugin-clock
+# 1) 改 index.js 后先把 package.json 的 version 往上抬一位（BOM/缓存坑见下）
+# 2) 打包：必须带 --cache，默认 npm cache 在 AppData，沙箱会拒写
+npm pack --cache .npm-cache
+# 3) 把新 tgz 拷到正式安装位
+Copy-Item .\dsh-plugin-clock-<新版本>.tgz C:\Users\Administrator\.dsh\plugins\ -Force
+```
+
+然后在 DSH 里用 `plugin_manager`：
+
+- 装：`action=install_bundle`, `target=file:C:/Users/Administrator/.dsh/plugins/dsh-plugin-clock-<版本>.tgz`
+  （热生效，不需要重启；装的是**解包副本**，改源码后必须重新 pack + 重装）
+- 卸：`action=remove_bundle`, `target=dsh-plugin-clock`
+
+## 踩过的坑
+
+- **别用 PowerShell `Set-Content -Encoding UTF8` 改 package.json**：Windows PowerShell 5.1
+  会写 BOM，DSH 校验时 `JSON.parse` 直接炸：
+  `Cannot validate installed package dsh-plugin-clock: SyntaxError: Unexpected token '﻿'`。
+  一律用 write 工具写 JSON。
+- 装坏了（依赖指向已删除的 tgz、node_modules 里留着带 BOM 的旧副本）时，`install_bundle`
+  会一直复读同一个报错。正确姿势：先 `remove_bundle`，再 `install_bundle`。
+- 卸载/重装一次会连带 prune 掉 47 个包（DSH 的 profile 依赖树本来就这样），重装后自动补回。
+
+## 配置项（cordis.patch.yml → 条目 config）
+
+```yaml
+- id: dsh-plugin-clock
+  name: dsh-plugin-clock
+  config:
+    order: 105              # runtime context 里的排位；100 是 working-directory，110 是 sandbox policy
+    timeZone: Asia/Hong_Kong # 默认取宿主 Intl 时区；可改成 UTC 等
+    injectClockLine: true    # false = 只保留日历通道，不发每分钟短消息
+```
+
+## 已知边界（有意为之）
+
+- **step 内不刷新**：一个 step 里的工具循环共用同一条读数（start 时采的）。跨 step 才刷新。
+  这是通道本身的限制，也是「墙上的钟」的合理语义。
+- **不猜「这次是不是在问时间」**：相关性检测靠不住，常驻可见成本又低，所以不做。
+- **不提供 clock 工具**：手表要人抬手看，模型不会抬手；工具型方案等于没装。
+- 短消息在 transcript 里是可见的 user 消息（`source.kind = 'clock'`）；嫌吵就把
+  `injectClockLine` 关掉，只留日历。

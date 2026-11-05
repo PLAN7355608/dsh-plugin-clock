@@ -1,0 +1,15 @@
+# 这行告诉 DSH：把下面这个插件条目插进"要不要加载"的清单里。
+# 注意 id 和 name 必须是包的英文名，写错就加载不起来。
+- insert:
+    - id: dsh-plugin-clock
+      name: dsh-plugin-clock
+      config:
+        # prompt context 的排序位。100 = working-directory，110 = sandbox policy。
+        # 放在 105 就是紧跟在"当前工作目录"后面，比它更显眼。
+        order: 105
+        # 留空则自动跟随宿主机时区（Intl 解析出来的那个）。
+        # timeZone: Asia/Hong_Kong
+        # 每个 step 发一条分钟级短消息（同一分钟去重）。关掉就只剩日历通道。
+        # injectClockLine: true
+        # 挡掉内置 time-context 每 10 分钟插的旧格式读数，避免两个时间来源打架。
+        # dropBuiltinTimeContext: true
