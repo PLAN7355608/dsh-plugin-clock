@@ -1,4 +1,4 @@
-# dsh-plugin-clock — a wall clock for the model
+# dsh-plugin-clock — Hanging a Wall Clock for the Model
 
 > **WARNING / 警告**
 >
@@ -6,13 +6,117 @@
 >
 > 警告：该项目代码完全由人工智能生成，本人无任何代码能力；若因使用这些代码产生任何人员伤亡和财产损失，本人概不负责。
 
-The model does not "read the wrong time" — it has no clock that keeps running. This plugin gives it one: at the start of every model step, the model gets a time reading for the current minute, plus a calendar anchor that rolls over daily.
+The model doesn't "sample the wrong time" — it simply **has no clock that keeps
+running**. This plugin supplies one: at the start of every model step, the model
+holds a time reading accurate to the minute, plus a calendar anchor that flips
+over once a day.
 
-The built-in `@deepseek-ai/dsh-time-context` has three structural problems (verified against its source and 682 measured steps):
+## Why the built-in approach is not enough
 
-1. **Hard 10-minute throttle**: `refreshIntervalMs` defaults to `600000`, so dozens of steps in a long turn share the same reading from several minutes ago (44.4% of measured steps saw a clock at least 5 minutes old, the oldest 599 seconds).
-2. **Append-only, never invalidated**: readings are ordinary user messages, so stale snapshots pile up in history instead of being superseded.
+The built-in `@deepseek-ai/dsh-time-context` has three structural problems (verified
+against the source, plus 682 real steps):
 
-This plugin replaces that behaviour with a per-step reading plus a daily calendar anchor.
+1. **Hard throttling at 10 minutes**: `refreshIntervalMs` defaults to `600000`, so
+   dozens of steps in a long turn all share the same reading taken several minutes
+   earlier (measured: 44.4% of steps saw a clock that was ≥5 minutes stale, the worst
+   being 599 seconds).
+2. **Append-only, never invalidated**: the reading is an ordinary user message, so the
+   history is littered with old snapshots and there is no supersedes semantics — the
+   model cannot tell which one to trust.
+3. **No date anchor in the system prompt**: the single `system/message` for the whole
+   conversation contains no `YYYY-MM-DD`, no year and no weekday.
 
-The full documentation (design, measurements, configuration) is written in Chinese: see [README.md](README.md).
+## Two channels, each with its own job
+
+| | Channel A: calendar | Channel B: time of day |
+| --- | --- | --- |
+| Mount point | `ctx.systemPrompt.context({name:'clock:calendar'})` | `ctx.on('agent/pre-step')` appends a very short user message |
+| Content | date, weekday, yesterday/tomorrow, ISO week, days left in the month | current time to the minute + time zone + offset |
+| When it changes | flips at the day boundary | flips at the minute boundary |
+| Size | 298 characters, **one** runtime-context snapshot **per day** (the whole snapshot is 2371 characters ≈ 740 token) | 131 characters ≈ 41 token, **one per minute**, about 2.4k token/hour while active |
+
+**Why doesn't the time of day go through context?** Because a runtime-context snapshot
+re-sends every piece of context registered by any plugin (measured: 2427 characters ≈
+758 token — image-gen, working-directory, policy, team identity…). Putting a live clock
+in there means re-sending it once a minute, which works out to **45k token/hour** —
+unacceptable. That was v1; it was measured and rejected. A separate short message only
+costs its own 41 token.
+
+**Why can the calendar go through context?** `SystemPrompt.refreshContext()` re-runs the
+context provider on every step, but `RuntimeContextProjection` only appends a new
+snapshot when **the text changes**. The calendar text contains no minutes, so there is
+just one snapshot per day and the cost is negligible. (Both checked in the 0.2.1-rc.5
+source: `refreshContext` / `resolveContext` in `dsh-system-prompt/lib/index.js`, and
+`RuntimeContextProjection.project` in `dsh-agent-loop/lib/index.js`.)
+
+## Measurements (this session, session-e8d5a2a4, after the 19:10 install)
+
+- Channel B: one message each at 19:10 and 19:11, 131 characters, **no duplicate within
+  the same minute** (`probe-v2.mjs`).
+- Channel A: one new 2371-character snapshot after install, `Calendar: 2026-11-01 Sunday`;
+  later steps on the same day appended nothing.
+- Offline: `node test-render.mjs` covers 23:59 on the last day of a month, ISO week 53
+  across a year boundary, the leap day 2028-02-29, New York's DST end date,
+  `Asia/Kathmandu +05:45`, `Pacific/Kiritimati +14`, UTC, and the four dedup boundaries
+  "unchanged within a minute / changes across a minute / constant within a day / changes
+  across a day".
+
+## Install / uninstall
+
+**Canonical install location**: `C:\Users\Administrator\.dsh\plugins\dsh-plugin-clock-0.1.2.tgz`
+(same place as `dsh-plugin-printer`; the profile's dependency line points at it, and the
+workspace directory is only the development source — deleting the workspace does not
+affect an already-installed plugin.)
+
+Refresh procedure after a development change:
+
+```powershell
+cd E:\bigbluefishWorkbench\dsh-plugin-clock
+# 1) After editing index.js, bump version in package.json first (see the BOM/cache trap below)
+# 2) Pack: --cache is mandatory; the default npm cache lives in AppData and the sandbox refuses to write there
+npm pack --cache .npm-cache
+# 3) Copy the new tgz to the canonical install location
+Copy-Item .\dsh-plugin-clock-<新版本>.tgz C:\Users\Administrator\.dsh\plugins\ -Force
+```
+
+Then use `plugin_manager` inside DSH:
+
+- Install: `action=install_bundle`, `target=file:C:/Users/Administrator/.dsh/plugins/dsh-plugin-clock-<版本>.tgz`
+  (takes effect hot, no restart needed; what gets installed is an **unpacked copy**, so
+  after changing the source you must pack and reinstall again)
+- Uninstall: `action=remove_bundle`, `target=dsh-plugin-clock`
+
+## Pitfalls
+
+- **Don't edit package.json with PowerShell `Set-Content -Encoding UTF8`**: Windows
+  PowerShell 5.1 writes a BOM, and DSH's validation blows up right in `JSON.parse`:
+  `Cannot validate installed package dsh-plugin-clock: SyntaxError: Unexpected token '﻿'`.
+  Always write JSON with the write tool.
+- If it is already broken (a dependency pointing at a deleted tgz, an old BOM-carrying
+  copy left behind in node_modules), `install_bundle` will keep repeating the same error.
+  The right move: `remove_bundle` first, then `install_bundle`.
+- One uninstall/reinstall also prunes 47 packages along with it (that is just how DSH's
+  profile dependency tree behaves); they are restored automatically after reinstalling.
+
+## Configuration (cordis.patch.yml → entry config)
+
+```yaml
+- id: dsh-plugin-clock
+  name: dsh-plugin-clock
+  config:
+    order: 105              # position in the runtime context; 100 is working-directory, 110 is sandbox policy
+    timeZone: Asia/Hong_Kong # defaults to the host's Intl time zone; can be changed to UTC etc.
+    injectClockLine: true    # false = keep only the calendar channel, no per-minute short message
+```
+
+## Known boundaries (intentional)
+
+- **No refresh within a step**: the tool loop inside one step shares the same reading
+  (sampled at start). It refreshes only across steps. This is a limit of the channel
+  itself, and also the sensible semantics of a "clock on the wall".
+- **No guessing whether this turn is about time**: relevance detection is unreliable and
+  always-on visibility is cheap, so we don't do it.
+- **No clock tool**: a wristwatch requires raising your arm, and the model won't; a
+  tool-based design is as good as not installing it.
+- The short message is a visible user message in the transcript (`source.kind = 'clock'`);
+  if that is too noisy, turn `injectClockLine` off and keep only the calendar.
