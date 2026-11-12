@@ -125,7 +125,7 @@ Then use `plugin_manager` inside DSH:
 
 ## License
 
-This project is released under the **GNU Affero General Public License v3.0 (AGPL-3.0)**. The full text is in [LICENSE](LICENSE).
+This project is released under the **MIT License**. The full text is in [LICENSE](LICENSE).
 
 In short: you may use, modify and distribute it freely, including commercially; but if you make a modified version available to others — including by running it as a network service — you must release the complete source code under the same license.
 
